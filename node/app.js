@@ -10,15 +10,26 @@
 /* jshint node: true, devel: true */
 'use strict';
 
-const 
+const
   bodyParser = require('body-parser'),
   config = require('config'),
   crypto = require('crypto'),
   express = require('express'),
-  https = require('https'),  
+  https = require('https'),
   request = require('request');
 
 var app = express();
+
+/* Include the winston logger module
+var winston = require('winston');
+winston.add(winston.transports.File, { filename: '/home/azureuser/app/mess_app.log' });
+console.error=logger.error;
+console.log=logger.ingo;
+console.info=logger.info;
+console.debug=logger.debug;
+console.warn=logger.warn;
+module.exports = console;
+ */
 
 app.set('port', process.env.PORT || 5000);
 app.use(bodyParser.json({ verify: verifyRequestSignature }));
@@ -62,8 +73,8 @@ app.get('/webhook', function(req, res) {
     res.status(200).send(req.query['hub.challenge']);
   } else {
     console.error("Failed validation. Make sure the validation tokens match.");
-    res.sendStatus(403);          
-  }  
+    res.sendStatus(403);
+  }
 });
 
 
@@ -107,6 +118,18 @@ app.post('/webhook', function (req, res) {
     // You must send back a 200, within 20 seconds, to let us know you've 
     // successfully received the callback. Otherwise, the request will time out.
     res.sendStatus(200);
+  } else {
+      if (data.body.message) {
+          var senderId = data.body.message.recipient_id;
+          var text = data.body.message.message_text;
+          console.log("Feedback message for  " + senderId);
+          sendTextMessage(senderId, 'Feedback! ' + text);
+          res.sendStatus(200);
+      }
+      else {
+          console.log("No message found! ", data.body);
+          res.sendStatus(404);
+      }
   }
 });
 
@@ -121,23 +144,31 @@ app.post('/webhook', function (req, res) {
 function verifyRequestSignature(req, res, buf) {
   var signature = req.headers["x-hub-signature"];
 
-  if (!signature) {
-    // For testing, let's log an error. In production, you should throw an 
-    // error.
-    console.error("Couldn't validate the signature.");
-  } else {
-    var elements = signature.split('=');
-    var method = elements[0];
-    var signatureHash = elements[1];
-
-    var expectedHash = crypto.createHmac('sha1', APP_SECRET)
-                        .update(buf)
-                        .digest('hex');
-
-    if (signatureHash != expectedHash) {
-      throw new Error("Couldn't validate the request signature.");
+    if (!signature) {
+        // For testing, let's log an error. In production, you should throw an 
+        // error.
+        console.error("Couldn't find the signature.");
     }
-  }
+    else {
+        var elements = signature.split('=');
+        var method = elements[0];
+        var signatureHash = elements[1];
+
+        if (method == 'schoolbag'){
+            var expectedHash = crypto.createHmac('sha1', APP_SECRET)
+                    .update(VALIDATION_TOKEN)
+                    .digest('hex');
+        }
+        else{
+            var expectedHash = crypto.createHmac('sha1', APP_SECRET)
+                    .update(buf)
+                    .digest('hex');
+        }
+
+        if (signatureHash != expectedHash) {
+            throw new Error("Verification failed for the request signature.");
+        }
+    }
 }
 
 /*
@@ -206,7 +237,8 @@ function receivedMessage(event) {
     // If we receive a text message, check to see if it matches any special
     // keywords and send back the corresponding example. Otherwise, just echo
     // the text we received.
-    switch (messageText) {
+      switch (messageText.toLowerCase()) {
+
       case 'image':
         sendImageMessage(senderID);
         break;
@@ -215,16 +247,25 @@ function receivedMessage(event) {
         sendButtonMessage(senderID);
         break;
 
+      case 'link':
+        sendButtonMessage(senderID);
+        break;
+
       case 'generic':
         sendGenericMessage(senderID);
         break;
 
-      case 'receipt':
-        sendReceiptMessage(senderID);
+      case 'homework':
+        sendHomeworkMessage(senderID);
+        break;
+
+      case 'phone':
+        sendPhoneMessage("+353872192917","Test sending to phone");
         break;
 
       default:
-        sendTextMessage(senderID, messageText);
+	        messageText = "Hi! This is Schoolbag.";
+	        sendTextMessage(senderID, messageText);
     }
   } else if (messageAttachments) {
     sendTextMessage(senderID, "Message with attachment received");
@@ -323,6 +364,23 @@ function sendTextMessage(recipientId, messageText) {
 }
 
 /*
+ * Send a text message using the Send API.
+ *
+ */
+function sendPhoneMessage(recipientPhone, messageText) {
+  var messageData = {
+    recipient: {
+      phone_number: recipientPhone
+    },
+    message: {
+      text: messageText
+    }
+  };
+
+  callSendAPI(messageData);
+}
+
+/*
  * Send a button message using the Send API.
  *
  */
@@ -336,10 +394,10 @@ function sendButtonMessage(recipientId) {
         type: "template",
         payload: {
           template_type: "button",
-          text: "This is test text",
+          text: "Schoolbag on the web",
           buttons:[{
             type: "web_url",
-            url: "https://www.oculus.com/en-us/rift/",
+            url: "https://schoolbag.ie/",
             title: "Open Web URL"
           }, {
             type: "postback",
@@ -400,7 +458,7 @@ function sendGenericMessage(recipientId) {
         }
       }
     }
-  };  
+  };
 
   callSendAPI(messageData);
 }
@@ -409,63 +467,49 @@ function sendGenericMessage(recipientId) {
  * Send a receipt message using the Send API.
  *
  */
-function sendReceiptMessage(recipientId) {
-  // Generate a random receipt ID as the API requires a unique ID
-  var receiptId = "order" + Math.floor(Math.random()*1000);
-
+function sendHomeworkMessage(recipientId) {
   var messageData = {
     recipient: {
       id: recipientId
     },
-    message:{
+    message: {
       attachment: {
         type: "template",
         payload: {
-          template_type: "receipt",
-          recipient_name: "Peter Chang",
-          order_number: receiptId,
-          currency: "USD",
-          payment_method: "Visa 1234",        
-          timestamp: "1428444852", 
+          template_type: "generic",
           elements: [{
-            title: "Oculus Rift",
-            subtitle: "Includes: headset, sensor, remote",
-            quantity: 1,
-            price: 599.00,
-            currency: "USD",
-            image_url: "http://messengerdemo.parseapp.com/img/riftsq.png"
+            title: "English - Mrs McGeady",
+            subtitle: "Revision Question: The Great Gatsby",
+              item_url: "https://schoolbag.ie/schoolbag/student/homework/show/316407",
+              image_url: "https://cachebag.learningdata.net/images/5459e7e935be09c829828506/medium",
+            buttons: [{
+              type: "web_url",
+                url: "https://schoolbag.ie/schoolbag/student/homework/show/316407",
+              title: "Open in Schoolbag"
+            }, {
+              type: "postback",
+              title: "Already done?",
+              payload: "Payload for first bubble",
+            }],
           }, {
-            title: "Samsung Gear VR",
-            subtitle: "Frost White",
-            quantity: 1,
-            price: 99.99,
-            currency: "USD",
-            image_url: "http://messengerdemo.parseapp.com/img/gearvrsq.png"
-          }],
-          address: {
-            street_1: "1 Hacker Way",
-            street_2: "",
-            city: "Menlo Park",
-            postal_code: "94025",
-            state: "CA",
-            country: "US"
-          },
-          summary: {
-            subtotal: 698.99,
-            shipping_cost: 20.00,
-            total_tax: 57.67,
-            total_cost: 626.66
-          },
-          adjustments: [{
-            name: "New Customer Discount",
-            amount: -50
-          }, {
-            name: "$100 Off Coupon",
-            amount: -100
+            title: "Science - Mr Walsh",
+            subtitle: "Acis, bases and metals revision",
+              item_url: "https://schoolbag.ie/schoolbag/student/homework/show/236176",
+              image_url: "https://cachebag.learningdata.net/images/54d2128901b145e9194be085/medium",
+            buttons: [{
+              type: "web_url",
+                url: "https://schoolbag.ie/schoolbag/student/homework/show/236176",
+              title: "Open in Schoolbag"
+            }, {
+              type: "postback",
+              title: "Already done?",
+              payload: "Payload for second bubble",
+            }]
           }]
         }
       }
     }
+
   };
 
   callSendAPI(messageData);
